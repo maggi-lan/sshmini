@@ -1,0 +1,36 @@
+# Binaries
+server
+client
+*.out
+*.exe
+
+# Object files
+*.o
+*.obj
+
+# Logs
+*.log
+audit.log
+
+# TLS / secrets
+key.pem
+cert.pem
+*.key
+*.crt
+*.csr
+*.pem
+
+# User / local config
+users.txt
+.env
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

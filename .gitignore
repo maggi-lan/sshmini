@@ -1,36 +1,34 @@
-# Binaries
-server
-client
-*.out
-*.exe
+# ─── Compiled Binaries ────────────────────────────────────
+sshmini-server
+sshmini-client
+sshmini-bench
+sshmini-adduser
 
-# Object files
+# ─── Object Files ─────────────────────────────────────────
 *.o
-*.obj
+*.a
+*.so
 
-# Logs
-*.log
-audit.log
-
-# TLS / secrets
-key.pem
-cert.pem
-*.key
+# ─── TLS Certificates & Keys (never commit private keys) ──
+certs/
 *.crt
-*.csr
+*.key
 *.pem
+*.csr
 
-# User / local config
-users.txt
-.env
+# ─── Runtime Data ─────────────────────────────────────────
+audit.log
+users.db
 
-# Editor / IDE
+# ─── Build Artifacts ──────────────────────────────────────
+*.out
+*.dSYM/
+
+# ─── Editor & OS Junk ─────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS files
 .DS_Store
 Thumbs.db

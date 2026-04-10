@@ -1,0 +1,247 @@
+# sshmini — Secure Remote Command Execution System
+
+A mini-SSH implementation in C using raw POSIX sockets, OpenSSL TLS 1.2+, and POSIX threads.  
+Built as a Jackfruit Mini Project for the Socket Programming module.
+
+---
+
+## Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                       CLIENT SIDE                            │
+│                                                              │
+│   sshmini-client                  sshmini-bench              │
+│   ┌──────────────┐                ┌─────────────────────┐    │
+│   │ Interactive  │                │ Concurrent load     │    │
+│   │ shell loop   │                │ test (N threads)    │    │
+│   └──────┬───────┘                └──────────┬──────────┘    │
+│          │  Custom binary protocol over TLS  │               │
+└──────────┼───────────────────────────────────┼───────────────┘
+           │           TCP + TLS 1.2+          │
+┌──────────┼───────────────────────────────────┼──────────────┐
+│          │            SERVER SIDE            │              │
+│   ┌──────▼───────────────────────────────────▼───────┐      │
+│   │              sshmini-server (main)               │      │
+│   │      TCP listen → accept → SSL_accept()          │      │
+│   └──────────────────────┬───────────────────────────┘      │
+│                          │  one thread per client           │
+│          ┌───────────────┴─────────────────┐                │
+│   ┌──────▼──────┐  ┌───────────┐  ┌────────▼──────┐         │
+│   │ Thread  #1  │  │ Thread #2 │  │  Thread  #N   │         │
+│   │ auth+cmds   │  │ auth+cmds │  │  auth+cmds    │         │
+│   └──────┬──────┘  └─────┬─────┘  └───────┬───────┘         │
+│          └───────────────┼────────────────┘                 │
+│                    ┌─────▼──────┐                           │
+│                    │  Mutex     │                           │
+│                    │  Audit Log │  audit.log                │
+│                    └────────────┘                           │
+│   auth.c → users.db (SHA-256 hashed passwords)              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Wire Protocol
+
+Each message uses an 8-byte fixed header:
+
+```
+Byte:  0        1        2        3        4        5        6        7
+       +--------+--------+--------+--------+--------+--------+--------+--------+
+       | type   | flags  |   payload_len (BE u16)   |   session_id (BE u32)   |
+       +--------+--------+--------+--------+--------+--------+--------+--------+
+       |<-- 1B -->|<-- 1B -->|<---------- 2B -------->|<---------- 4B -------->|
+```
+
+| Message Type    | Code | Direction        | Payload                     |
+| --------------- | ---- | ---------------- | --------------------------- |
+| `MSG_AUTH_REQ`  | 0x10 | Client → Server  | `username\0password\0`      |
+| `MSG_AUTH_OK`   | 0x11 | Server → Client  | `"OK"`                      |
+| `MSG_AUTH_FAIL` | 0x12 | Server → Client  | `"FAIL"`                    |
+| `MSG_CMD`       | 0x20 | Client → Server  | Shell command string        |
+| `MSG_OUTPUT`    | 0x21 | Server → Client  | Command stdout+stderr chunk |
+| `MSG_EXIT_CODE` | 0x22 | Server → Client  | 1-byte exit code            |
+| `MSG_PING`      | 0x30 | Either direction | Empty                       |
+| `MSG_PONG`      | 0x31 | Either direction | Empty                       |
+| `MSG_BYE`       | 0xFF | Either direction | Empty (graceful disconnect) |
+
+---
+
+## Project Structure
+
+```
+sshmini/
+├── common/
+│   ├── protocol.h      # Wire protocol definitions, message types, header layout
+│   └── utils.c/h       # SSL context creation, send_msg/recv_msg, logging
+├── server/
+│   ├── server.c        # Main server: accept loop, per-client threads, command exec
+│   ├── auth.c/h        # SHA-256 credential verification against users.db
+│   └── adduser.c       # CLI tool to add/update users in users.db
+├── client/
+│   ├── client.c        # Interactive client with colored prompt
+│   └── bench.c         # Concurrent benchmark tool
+├── certs/              # TLS certificate + private key (generated by `make certs`)
+├── users.db            # Flat-file credential store (created by sshmini-adduser)
+├── audit.log           # Timestamped audit log (created at server runtime)
+└── Makefile
+```
+
+---
+
+## Build & Setup
+
+### Prerequisites
+
+```bash
+# Ubuntu / Debian
+sudo apt install gcc libssl-dev make
+
+# Fedora / RHEL
+sudo dnf install gcc openssl-devel make
+```
+
+### Build
+
+```bash
+make all        # builds all 4 binaries
+make certs      # generates self-signed TLS cert + key in ./certs/
+```
+
+### Add Users
+
+```bash
+./sshmini-adduser alice mypassword
+./sshmini-adduser bob   s3cr3t
+```
+
+Passwords are stored as **SHA-256 hashes** — plaintext is never written to disk.
+
+---
+
+## Running
+
+### Start the Server
+
+```bash
+./sshmini-server          # listens on default port 4422
+./sshmini-server 9000     # custom port
+```
+
+Server output goes to **stderr** and **audit.log**.
+
+### Connect with the Client
+
+```bash
+./sshmini-client 127.0.0.1          # connect to localhost, port 4422
+./sshmini-client 192.168.1.10 9000  # custom host + port
+```
+
+You will be prompted for username and password (password input is hidden).  
+Once authenticated you get an interactive prompt:
+
+```
+[+] TLS connection established (TLS_AES_256_GCM_SHA384)
+[+] Authenticated as alice
+
+alice@127.0.0.1:~$ uname -a
+Linux host 5.15.0 #1 SMP x86_64 GNU/Linux
+alice@127.0.0.1:~$ ls /var/log | head -5
+alice@127.0.0.1:~$ exit
+Goodbye.
+```
+
+Type `exit` or `quit` to disconnect gracefully.
+
+---
+
+## Performance Benchmark
+
+```bash
+# First add the bench user
+./sshmini-adduser benchuser benchpass
+
+# Start the server (separate terminal)
+./sshmini-server
+
+# Run benchmark: 10 concurrent clients, 20 commands each
+./sshmini-bench 127.0.0.1 4422 10 20
+```
+
+Sample output:
+
+```
+=== sshmini Benchmark ===
+Server : 127.0.0.1:4422
+Clients: 8
+Cmds/cl: 15
+Command: echo hello_world
+
+─────────────────────────────────────────
+Wall clock time    : 1115.7 ms
+Commands attempted : 120
+Commands succeeded : 120
+Errors             : 0
+Avg latency/cmd    : 70.69 ms
+Throughput         : 107.6 cmd/s
+─────────────────────────────────────────
+```
+
+---
+
+## Security Features
+
+| Feature                  | Implementation                                             |
+| ------------------------ | ---------------------------------------------------------- |
+| **Transport encryption** | TLS 1.2+ (OpenSSL), AES-256-GCM cipher                     |
+| **Authentication**       | Username + SHA-256 hashed password, max 3 attempts         |
+| **Audit logging**        | Every session event logged with timestamp, SID, user, IP   |
+| **Command blocking**     | Dangerous commands (e.g. `rm -rf /`) blocked by policy     |
+| **Password masking**     | Client disables terminal echo during password entry        |
+| **SIGPIPE handling**     | Server ignores SIGPIPE; broken connections clean up safely |
+| **Session IDs**          | Unique 32-bit ID per connection for log correlation        |
+
+---
+
+## Evaluation Criteria Mapping
+
+| Rubric Component                           | Implementation                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| **Problem Definition & Architecture**      | Mini-SSH with TLS, custom protocol, threaded server                |
+| **Core Implementation**                    | Raw `socket()`, `bind()`, `listen()`, `accept()`, `SSL_read/write` |
+| **Feature Implementation (Deliverable 1)** | Auth, command exec, output streaming, SSL, multi-client            |
+| **Performance Evaluation**                 | `sshmini-bench`: throughput, latency, concurrent clients           |
+| **Optimization & Fixes**                   | Blocked commands, SIGPIPE, SSL handshake error handling, mutex log |
+| **Final Demo (Deliverable 2)**             | Full interactive demo + GitHub repo                                |
+
+---
+
+## Audit Log Sample
+
+```
+[2026-03-25 17:04:58] [INFO ] New connection from 127.0.0.1:53002 [SID=69C515BA] active=1
+[2026-03-25 17:04:58] [INFO ] [SID=69C515BA][-@127.0.0.1] TLS_CONNECT: TLS_AES_256_GCM_SHA384
+[2026-03-25 17:04:58] [INFO ] [SID=69C515BA][alice@127.0.0.1] AUTH_SUCCESS:
+[2026-03-25 17:04:58] [INFO ] [SID=69C515BA][alice@127.0.0.1] CMD_EXEC: uname -a
+[2026-03-25 17:04:58] [INFO ] [SID=69C515BA][alice@127.0.0.1] DISCONNECT: client bye
+```
+
+---
+
+## Known Limitations (for report discussion)
+
+- **Self-signed cert**: client skips peer verification (`SSL_VERIFY_NONE`). In production, load a CA cert.
+- **No PTY allocation**: interactive programs (vim, top) won't work correctly — stdout is captured via `popen()`.
+- **Flat credential file**: `users.db` is not encrypted. Production systems would use PAM or LDAP.
+- **No session resumption**: every connection performs a full TLS handshake.
+
+---
+
+## Makefile Targets
+
+| Target       | Description                          |
+| ------------ | ------------------------------------ |
+| `make all`   | Build all 4 binaries                 |
+| `make certs` | Generate self-signed TLS certificate |
+| `make clean` | Remove binaries and object files     |

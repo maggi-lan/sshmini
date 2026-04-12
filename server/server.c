@@ -121,6 +121,22 @@ static int conn_count(void) {
 }
 
 /* ─── Print connection table to stdout ───────────────── */
+/*
+ * Column widths (plain chars, no ANSI):
+ *   SID       : 8
+ *   IP Address: 15
+ *   Port      : 5
+ *   User      : 16
+ *   Duration  : 10
+ * Colours are printed separately so they never affect padding.
+ */
+#define COL_SID   8
+#define COL_IP   15
+#define COL_PORT  5
+#define COL_USER 16
+#define COL_DUR  10
+#define COL_SEP  "   "   /* 3-space column separator */
+
 static void print_conn_table(void) {
     pthread_mutex_lock(&g_conn_mutex);
 
@@ -128,46 +144,91 @@ static void print_conn_table(void) {
     for (int i = 0; i < MAX_CLIENTS; i++)
         if (g_conns[i].active) count++;
 
-    printf("\n%s┌─────────────────────────────────────────────────────────────────────┐%s\n", C_CYAN, C_RESET);
-    printf("%s│%s  Active Connections: %s%d / %d%s%-41s%s│%s\n",
-           C_CYAN, C_RESET, C_BOLD, count, MAX_CLIENTS, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s├──────────┬──────────────────┬───────┬──────────────┬────────────────┤%s\n", C_CYAN, C_RESET);
-    printf("%s│%s %-8s %s│%s %-16s %s│%s %-5s %s│%s %-12s %s│%s %-14s %s│%s\n",
-           C_CYAN, C_GREY, "SID",
-           C_CYAN, C_GREY, "IP Address",
-           C_CYAN, C_GREY, "Port",
-           C_CYAN, C_GREY, "User",
-           C_CYAN, C_GREY, "Duration",
-           C_CYAN, C_RESET);
-    printf("%s├──────────┼──────────────────┼───────┼──────────────┼────────────────┤%s\n", C_CYAN, C_RESET);
+    /* ── Header ─────────────────────────────────────── */
+    printf("\n");
+    printf("  %sActive connections:%s %s%d%s / %d\n",
+           C_GREY, C_RESET, C_BOLD, count, C_RESET, MAX_CLIENTS);
 
-    time_t now = time(NULL);
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (!g_conns[i].active) continue;
-        long secs = (long)(now - g_conns[i].connected_at);
-        char dur[32];
-        if (secs < 60)
-            snprintf(dur, sizeof(dur), "%lds", secs);
-        else if (secs < 3600)
-            snprintf(dur, sizeof(dur), "%ldm %lds", secs/60, secs%60);
-        else
-            snprintf(dur, sizeof(dur), "%ldh %ldm", secs/3600, (secs%3600)/60);
+    /* underline = total width of all columns + separators */
+    printf("  %s", C_GREY);
+    int line_w = COL_SID + COL_IP + COL_PORT + COL_USER + COL_DUR
+                 + (int)(4 * strlen(COL_SEP));
+    for (int i = 0; i < line_w; i++) putchar('-');
+    printf("%s\n", C_RESET);
 
-        const char *user = g_conns[i].username[0] ? g_conns[i].username : C_YELLOW "(authing)" C_RESET;
-        printf("%s│%s %s%08X%s %s│%s %-16s %s│%s %-5d %s│%s %-12s %s│%s %-14s %s│%s\n",
-               C_CYAN, C_RESET,
-               C_GREEN, g_conns[i].session_id, C_RESET,
-               C_CYAN, C_RESET, g_conns[i].ip,
-               C_CYAN, C_RESET, g_conns[i].port,
-               C_CYAN, C_RESET, user,
-               C_CYAN, C_RESET, dur,
-               C_CYAN, C_RESET);
+    /* column headers */
+    printf("  %s"
+           "%-*s" COL_SEP
+           "%-*s" COL_SEP
+           "%-*s" COL_SEP
+           "%-*s" COL_SEP
+           "%-*s"
+           "%s\n",
+           C_GREY,
+           COL_SID,  "SID",
+           COL_IP,   "IP Address",
+           COL_PORT, "Port",
+           COL_USER, "User",
+           COL_DUR,  "Duration",
+           C_RESET);
+
+    /* underline again */
+    printf("  %s", C_GREY);
+    for (int i = 0; i < line_w; i++) putchar('-');
+    printf("%s\n", C_RESET);
+
+    /* ── Rows ───────────────────────────────────────── */
+    if (count == 0) {
+        printf("  %s(no active connections)%s\n", C_GREY, C_RESET);
+    } else {
+        time_t now = time(NULL);
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (!g_conns[i].active) continue;
+
+            /* duration string */
+            long secs = (long)(now - g_conns[i].connected_at);
+            char dur[32];
+            if (secs < 60)
+                snprintf(dur, sizeof(dur), "%lds", secs);
+            else if (secs < 3600)
+                snprintf(dur, sizeof(dur), "%ldm%lds", secs/60, secs%60);
+            else
+                snprintf(dur, sizeof(dur), "%ldh%ldm", secs/3600, (secs%3600)/60);
+
+            /* user string — plain, no embedded colour so %-*s pads correctly */
+            char user_plain[MAX_USERNAME + 12];
+            if (g_conns[i].username[0])
+                snprintf(user_plain, sizeof(user_plain), "%s", g_conns[i].username);
+            else
+                snprintf(user_plain, sizeof(user_plain), "(authing)");
+
+            /* print each column with colour around it, width on plain value */
+            printf("  ");
+
+            /* SID */
+            printf("%s%08X%s" COL_SEP,
+                   C_GREEN, g_conns[i].session_id, C_RESET);
+
+            /* IP — left-padded plain */
+            printf("%-*s" COL_SEP, COL_IP, g_conns[i].ip);
+
+            /* Port */
+            printf("%-*d" COL_SEP, COL_PORT, g_conns[i].port);
+
+            /* User — colour only, width on plain string */
+            if (g_conns[i].username[0])
+                printf("%s%-*s%s" COL_SEP,
+                       C_RESET, COL_USER, user_plain, C_RESET);
+            else
+                printf("%s%-*s%s" COL_SEP,
+                       C_YELLOW, COL_USER, user_plain, C_RESET);
+
+            /* Duration */
+            printf("%s%s%s\n", C_GREY, dur, C_RESET);
+        }
     }
 
-    if (count == 0)
-        printf("%s│%s  %-66s %s│%s\n", C_CYAN, C_GREY, "No active connections.", C_CYAN, C_RESET);
-
-    printf("%s└──────────┴──────────────────┴───────┴──────────────┴────────────────┘%s\n\n", C_CYAN, C_RESET);
+    printf("\n");
     fflush(stdout);
 
     pthread_mutex_unlock(&g_conn_mutex);
@@ -394,17 +455,19 @@ int main(int argc, char *argv[]) {
     }
 
     /* ── Startup banner ──────────────────────────────── */
-    printf("\n%s╔═══════════════════════════════════════════════════╗%s\n", C_CYAN, C_RESET);
-    printf("%s║%s  %ssshmini-server%s — Secure Remote Command Execution %s║%s\n", C_CYAN, C_RESET, C_BOLD, C_RESET, C_CYAN, C_RESET);
-    printf("%s╠═══════════════════════════════════════════════════╣%s\n", C_CYAN, C_RESET);
-    printf("%s║%s  Port        : %s%d%s%-26s%s     ║%s\n", C_CYAN, C_RESET, C_GREEN, port, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s║%s  Max clients : %s%d%s%-26s%s       ║%s\n", C_CYAN, C_RESET, C_GREEN, MAX_CLIENTS, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s║%s  Protocol    : %sTLS 1.2 / 1.3%s%-20s%s  ║%s\n", C_CYAN, C_RESET, C_GREEN, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s║%s  Cipher      : %sAES-256-GCM-SHA384%s%-15s%s  ║%s\n", C_CYAN, C_RESET, C_GREEN, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s║%s  Key Exch    : %sECDHE (Forward Secrecy)%s%-9s%s   ║%s\n", C_CYAN, C_RESET, C_GREEN, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s║%s  Auth        : %sSHA-256 hashed passwords%s%-9s%s  ║%s\n", C_CYAN, C_RESET, C_GREEN, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s║%s  Audit log   : %s%s%s%-26s%s║%s\n", C_CYAN, C_RESET, C_GREEN, LOG_FILE, C_RESET, "", C_CYAN, C_RESET);
-    printf("%s╚═══════════════════════════════════════════════════╝%s\n\n", C_CYAN, C_RESET);
+    printf("\n");
+    printf("  %s%s%s\n", C_BOLD, "sshmini-server — Secure Remote Command Execution", C_RESET);
+    printf("  %s%s%s\n", C_GREY,
+           "─────────────────────────────────────────────────", C_RESET);
+    printf("  %-14s %s%d%s\n",       "Port",        C_GREEN, port,        C_RESET);
+    printf("  %-14s %s%d%s\n",       "Max clients", C_GREEN, MAX_CLIENTS, C_RESET);
+    printf("  %-14s %sTLS 1.2 / 1.3%s\n",           "Protocol",  C_GREEN, C_RESET);
+    printf("  %-14s %sAES-256-GCM-SHA384%s\n",       "Cipher",    C_GREEN, C_RESET);
+    printf("  %-14s %sECDHE (Forward Secrecy)%s\n",  "Key Exch",  C_GREEN, C_RESET);
+    printf("  %-14s %sSHA-256 hashed passwords%s\n", "Auth",      C_GREEN, C_RESET);
+    printf("  %-14s %s%s%s\n",       "Audit log",   C_GREEN, LOG_FILE,    C_RESET);
+    printf("  %s%s%s\n\n", C_GREY,
+           "─────────────────────────────────────────────────", C_RESET);
     fflush(stdout);
 
     while (1) {

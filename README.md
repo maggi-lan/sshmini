@@ -8,16 +8,16 @@ Built as a Jackfruit Mini Project for the Socket Programming module.
 ## Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                       CLIENT SIDE                            │
-│                                                              │
-│   sshmini-client                  sshmini-bench              │
-│   ┌──────────────┐                ┌─────────────────────┐    │
-│   │ Interactive  │                │ Concurrent load     │    │
-│   │ shell loop   │                │ test (N threads)    │    │
-│   └──────┬───────┘                └──────────┬──────────┘    │
-│          │  Custom binary protocol over TLS  │               │
-└──────────┼───────────────────────────────────┼───────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                       CLIENT SIDE                           │
+│                                                             │
+│   sshmini-client                  sshmini-bench             │
+│   ┌──────────────┐                ┌─────────────────────┐   │
+│   │ Interactive  │                │ Concurrent load     │   │
+│   │ shell loop   │                │ test (N threads)    │   │
+│   └──────┬───────┘                └──────────┬──────────┘   │
+│          │  Custom binary protocol over TLS  │              │
+└──────────┼───────────────────────────────────┼──────────────┘
            │           TCP + TLS 1.2+          │
 ┌──────────┼───────────────────────────────────┼──────────────┐
 │          │            SERVER SIDE            │              │
@@ -49,9 +49,9 @@ Each message uses an 8-byte fixed header:
 ```
 Byte:  0        1        2        3        4        5        6        7
        +--------+--------+--------+--------+--------+--------+--------+--------+
-       | type   | flags  |   payload_len (BE u16)   |   session_id (BE u32)   |
+       | type   | flags  |   payload_len (BE u16)   |   session_id (BE u32)    |
        +--------+--------+--------+--------+--------+--------+--------+--------+
-       |<-- 1B -->|<-- 1B -->|<---------- 2B -------->|<---------- 4B -------->|
+       |<- 1B ->|<- 1B ->|<---------- 2B ---------->|<---------- 4B ---------->|
 ```
 
 | Message Type    | Code | Direction        | Payload                     |
@@ -201,19 +201,6 @@ Throughput         : 107.6 cmd/s
 | **Password masking**     | Client disables terminal echo during password entry        |
 | **SIGPIPE handling**     | Server ignores SIGPIPE; broken connections clean up safely |
 | **Session IDs**          | Unique 32-bit ID per connection for log correlation        |
-
----
-
-## Evaluation Criteria Mapping
-
-| Rubric Component                           | Implementation                                                     |
-| ------------------------------------------ | ------------------------------------------------------------------ |
-| **Problem Definition & Architecture**      | Mini-SSH with TLS, custom protocol, threaded server                |
-| **Core Implementation**                    | Raw `socket()`, `bind()`, `listen()`, `accept()`, `SSL_read/write` |
-| **Feature Implementation (Deliverable 1)** | Auth, command exec, output streaming, SSL, multi-client            |
-| **Performance Evaluation**                 | `sshmini-bench`: throughput, latency, concurrent clients           |
-| **Optimization & Fixes**                   | Blocked commands, SIGPIPE, SSL handshake error handling, mutex log |
-| **Final Demo (Deliverable 2)**             | Full interactive demo + GitHub repo                                |
 
 ---
 
